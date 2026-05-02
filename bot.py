@@ -23,14 +23,18 @@ logger = logging.getLogger(__name__)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Auto-translate messages exceeding CHAR_THRESHOLD."""
-    text = update.effective_message.text
-    if not text or len(text) <= CHAR_THRESHOLD:
+    """Auto-translate messages exceeding CHAR_THRESHOLD. Always tracks last message for /translate."""
+    msg = update.effective_message
+    text = msg.text
+    if not text:
+        return
+    context.chat_data["last_message"] = msg
+    if len(text) <= CHAR_THRESHOLD:
         return
     translated = await translate_auto(text)
     if not translated:
         return
-    await update.effective_message.reply_html(f"<i>{escape(translated)}</i>")
+    await msg.reply_html(f"<i>{escape(translated)}</i>")
 
 
 async def handle_translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -38,7 +42,9 @@ async def handle_translate_command(update: Update, context: ContextTypes.DEFAULT
     message = update.effective_message
     replied = message.reply_to_message
     if not replied or not replied.text:
-        await message.reply_text("Reply to a message with /translate to translate it.")
+        replied = context.chat_data.get("last_message")
+    if not replied or not replied.text:
+        await message.reply_text("No recent message to translate.")
         return
     translated = await translate_auto(replied.text)
     if not translated:
