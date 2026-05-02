@@ -12,12 +12,13 @@ from telegram.ext import (
 )
 
 from config import BOT_TOKEN, CHAR_THRESHOLD, GROUP_CHAT_IDS
-from translation import translate_auto
+from translation import translate_auto, translate_inline
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -52,19 +53,20 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not query:
         await update.inline_query.answer([], cache_time=0)
         return
-    translated = await translate_auto(query)
+    translated = await translate_inline(query)
     if not translated:
         await update.inline_query.answer([], cache_time=0)
         return
     title = translated[:64] + ("…" if len(translated) > 64 else "")
+    message_text = f"{escape(query)}\n-----\n<i>{escape(translated)}</i>"
     result = InlineQueryResultArticle(
         id="1",
         title=title,
         input_message_content=InputTextMessageContent(
-            message_text=f"<i>{escape(translated)}</i>",
+            message_text=message_text,
             parse_mode="HTML",
         ),
-        description="Send translation",
+        description="Send with translation",
     )
     await update.inline_query.answer([result], cache_time=0)
 

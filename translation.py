@@ -50,3 +50,20 @@ def _translate_sync(text: str) -> str | None:
 
 async def translate_auto(text: str) -> str | None:
     return await asyncio.to_thread(_translate_sync, text)
+
+
+def _translate_inline_sync(text: str) -> str | None:
+    """Translate for inline mode: Cyrillic-dominant → EN, otherwise → RU.
+    Skips langdetect so short English phrases are handled reliably."""
+    cyrillic = sum(1 for c in text if 0x0400 <= ord(c) <= 0x04FF and c.isalpha())
+    latin = sum(1 for c in text if ord(c) < 0x0080 and c.isalpha())
+    dest = "en" if cyrillic > latin else "ru"
+    try:
+        return GoogleTranslator(source="auto", target=dest).translate(text)
+    except Exception:
+        logger.exception("Translation failed")
+        return None
+
+
+async def translate_inline(text: str) -> str | None:
+    return await asyncio.to_thread(_translate_inline_sync, text)
