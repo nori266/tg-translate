@@ -69,17 +69,25 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.inline_query.answer([result], cache_time=0)
 
 
+async def log_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    logger.info("Received message from chat_id=%s name=%r type=%s", chat.id, chat.title or chat.username, chat.type)
+
+
 def main() -> None:
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    group_filter = filters.Chat(chat_id=GROUP_CHAT_IDS)
-
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & group_filter,
-        handle_message,
-    ))
-    app.add_handler(CommandHandler("translate", handle_translate_command))
-    app.add_handler(InlineQueryHandler(handle_inline_query))
+    if not GROUP_CHAT_IDS:
+        logger.warning("GROUP_CHAT_IDS not set — running in discovery mode, logging chat IDs only")
+        app.add_handler(MessageHandler(filters.ALL, log_chat_id))
+    else:
+        group_filter = filters.Chat(chat_id=GROUP_CHAT_IDS)
+        app.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND & group_filter,
+            handle_message,
+        ))
+        app.add_handler(CommandHandler("translate", handle_translate_command))
+        app.add_handler(InlineQueryHandler(handle_inline_query))
 
     logger.info("Bot started. CHAR_THRESHOLD=%d, GROUP_CHAT_IDS=%s", CHAR_THRESHOLD, GROUP_CHAT_IDS)
     app.run_polling()
