@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 from deep_translator import GoogleTranslator
 from langdetect import detect, LangDetectException
@@ -7,6 +8,10 @@ from langdetect import detect, LangDetectException
 from config import LANGUAGES
 
 logger = logging.getLogger(__name__)
+
+MAX_TEXT_CHARS = 5000  # deep_translator rejects anything at or above this
+MAX_ATTEMPTS = 3
+RETRY_DELAY_SECONDS = 1.0
 
 
 def _detect_lang(text: str) -> str | None:
@@ -66,17 +71,36 @@ def detect_source_lang(text: str) -> str | None:
     return lang if lang in LANGUAGES else None
 
 
-def _translate_to_sync(text: str, target: str) -> str | None:
-    try:
-        translated = GoogleTranslator(source="auto", target=target).translate(text)
-    except Exception:
-        logger.exception("Translation to %s failed", target)
-        return None
+def _is_error_page(translated: str | None) -> bool:
     # deep_translator returns Google's HTML error page as the translated string instead of raising
-    if translated and translated.lstrip().startswith("Error ") and "an error" in translated:
-        logger.error("Google Translate returned an error page for target=%s: %s", target, translated[:120])
+    return bool(translated) and translated.lstrip().startswith("Error ") and "an error" in translated
+
+
+def _translate_to_sync(text: str, target: str) -> str | None:
+    if not 0 < len(text) < MAX_TEXT_CHARS:
+        logger.error("Text of %d chars is outside the translatable range (0, %d)", len(text), MAX_TEXT_CHARS)
         return None
-    return translated
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            translated = GoogleTranslator(source="auto", target=target).translate(text)
+        except Exception:
+            logger.warning("Translation to %s raised on attempt %d/%d", target, attempt, MAX_ATTEMPTS, exc_info=True)
+            translated = None
+        else:
+            if _is_error_page(translated):
+                logger.warning(
+                    "Google Translate returned an error page for target=%s on attempt %d/%d: %s",
+                    target, attempt, MAX_ATTEMPTS, translated[:120],
+                )
+                translated = None
+        if translated:
+            return translated
+        if attempt < MAX_ATTEMPTS:
+            time.sleep(RETRY_DELAY_SECONDS * attempt)
+
+    logger.error("Translation to %s failed after %d attempts", target, MAX_ATTEMPTS)
+    return None
 
 
 async def translate_to(text: str, target: str) -> str | None:
