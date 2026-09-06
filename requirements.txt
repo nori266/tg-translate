@@ -1,4 +1,4 @@
-python-telegram-bot==21.10
+python-telegram-bot==22.8
 deep-translator==1.11.4
 langdetect==1.0.9
 telethon==1.36.0
