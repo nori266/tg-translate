@@ -1,9 +1,17 @@
+import asyncio
 import logging
 from html import escape
 
-from telegram import InlineQueryResultArticle, InputTextMessageContent, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
+    Update,
+)
 from telegram.ext import (
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     InlineQueryHandler,
@@ -11,8 +19,10 @@ from telegram.ext import (
     filters,
 )
 
-from config import BOT_TOKEN, CHAR_THRESHOLD, GROUP_CHAT_IDS
-from translation import translate_auto, translate_inline
+from config import BOT_TOKEN, CHAR_THRESHOLD, GROUP_CHAT_IDS, LANGUAGES
+from translation import detect_source_lang, translate_auto, translate_to
+
+LANG_CALLBACK_PREFIX = "tl:"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -38,7 +48,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def handle_translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/translate — reply to any message to get a translation."""
+    """/translate — reply to any message to choose a target language for it."""
     message = update.effective_message
     replied = message.reply_to_message
     if not replied or not replied.text:
@@ -46,35 +56,52 @@ async def handle_translate_command(update: Update, context: ContextTypes.DEFAULT
     if not replied or not replied.text:
         await message.reply_text("No recent message to translate.")
         return
-    translated = await translate_auto(replied.text)
-    if not translated:
-        await message.reply_text("Language not detected or not supported (only EN↔RU).")
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(label, callback_data=f"{LANG_CALLBACK_PREFIX}{code}")
+        for code, label in LANGUAGES.items()
+    ]])
+    await replied.reply_text("Translate to:", reply_markup=keyboard)
+
+
+async def handle_language_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Language button tapped: replace the prompt with the translation of the message it replies to."""
+    query = update.callback_query
+    await query.answer()
+    target = query.data.removeprefix(LANG_CALLBACK_PREFIX)
+    source = query.message.reply_to_message
+    if not source or not source.text:
+        await query.edit_message_text("Original message is no longer available.")
         return
-    await replied.reply_html(f"<i>{escape(translated)}</i>")
+    translated = await translate_to(source.text, target)
+    if not translated:
+        await query.edit_message_text("Translation failed.")
+        return
+    await query.edit_message_text(f"<i>{escape(translated)}</i>", parse_mode="HTML")
 
 
 async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Inline mode: @botname <text> → offers translated text to send."""
+    """Inline mode: @botname <text> → one sendable result per target language."""
     query = update.inline_query.query.strip()
     if not query:
         await update.inline_query.answer([], cache_time=0)
         return
-    translated = await translate_inline(query)
-    if not translated:
-        await update.inline_query.answer([], cache_time=0)
-        return
-    title = translated[:64] + ("…" if len(translated) > 64 else "")
-    message_text = f"{escape(query)}\n-----\n<i>{escape(translated)}</i>"
-    result = InlineQueryResultArticle(
-        id="1",
-        title=title,
-        input_message_content=InputTextMessageContent(
-            message_text=message_text,
-            parse_mode="HTML",
-        ),
-        description="Send with translation",
-    )
-    await update.inline_query.answer([result], cache_time=0)
+    source = detect_source_lang(query)
+    targets = [code for code in LANGUAGES if code != source]
+    translations = await asyncio.gather(*(translate_to(query, code) for code in targets))
+    results = [
+        InlineQueryResultArticle(
+            id=code,
+            title=LANGUAGES[code],
+            input_message_content=InputTextMessageContent(
+                message_text=f"{escape(query)}\n-----\n<i>{escape(translated)}</i>",
+                parse_mode="HTML",
+            ),
+            description=translated,
+        )
+        for code, translated in zip(targets, translations)
+        if translated
+    ]
+    await update.inline_query.answer(results, cache_time=0)
 
 
 async def log_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -95,6 +122,7 @@ def main() -> None:
             handle_message,
         ))
         app.add_handler(CommandHandler("translate", handle_translate_command))
+        app.add_handler(CallbackQueryHandler(handle_language_choice, pattern=f"^{LANG_CALLBACK_PREFIX}"))
         app.add_handler(InlineQueryHandler(handle_inline_query))
 
     logger.info("Bot started. CHAR_THRESHOLD=%d, GROUP_CHAT_IDS=%s", CHAR_THRESHOLD, GROUP_CHAT_IDS)
